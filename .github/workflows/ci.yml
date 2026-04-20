@@ -1,0 +1,83 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: test_db
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest pytest-cov
+    
+    - name: Run tests
+      run: |
+        pytest tests/ -v --cov=backend
+      env:
+        DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
+        CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
+    
+    - name: Upload coverage
+      uses: codecov/codecov-action@v3
+      with:
+        files: ./coverage.xml
+
+  lint:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Lint with flake8
+      run: |
+        pip install flake8
+        flake8 backend scrapers --count --select=E9,F63,F7,F82 --show-source --statistics
+        flake8 backend scrapers --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+
+  deploy:
+    needs: [test, lint]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Deploy to Railway
+      uses: addnab/docker-run-action@v3
+      with:
+        image: railway/cli:latest
+        options: -e RAILWAY_TOKEN=${{ secrets.RAILWAY_TOKEN }}
+        run: railway up

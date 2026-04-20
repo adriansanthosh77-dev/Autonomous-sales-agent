@@ -1,0 +1,94 @@
+{
+  "b2b_saas": {
+    "name": "B2B SaaS Companies",
+    "description": "Software-as-a-Service companies targeting businesses",
+    "keywords": ["SaaS", "B2B", "software", "platform", "cloud"],
+    "min_employees": 10,
+    "max_employees": 5000,
+    "industries": ["Software", "Technology", "B2B"],
+    "job_titles": ["CEO", "Founder", "VP Sales", "Head of Growth", "VP Product", "CRO"],
+    "company_age_min": 1,
+    "funding_min": 0
+  },
+  "fintech": {
+    "name": "FinTech Companies",
+    "description": "Financial technology and payments companies",
+    "keywords": ["fintech", "payments", "crypto", "finance", "banking", "blockchain"],
+    "min_employees": 5,
+    "max_employees": 2000,
+    "industries": ["Financial Services", "FinTech", "Payments"],
+    "job_titles": ["CEO", "CTO", "VP Product", "Chief Revenue Officer", "Founder"],
+    "funding_min": 1000000
+  },
+  "ai_startups": {
+    "name": "AI & ML Startups",
+    "description": "Artificial Intelligence and Machine Learning companies",
+    "keywords": ["AI", "ML", "machine learning", "LLM", "artificial intelligence", "deep learning"],
+    "min_employees": 2,
+    "max_employees": 500,
+    "industries": ["AI/ML", "Artificial Intelligence", "Technology"],
+    "job_titles": ["CEO", "Founder", "CTO", "VP Engineering", "VP Product"],
+    "company_age_min": 0,
+    "company_age_max": 5
+  },
+  "healthcare": {
+    "name": "Healthcare Tech",
+    "description": "Healthcare and biotech companies",
+    "keywords": ["healthcare", "health", "medical", "biotech", "pharma", "wellness"],
+    "min_employees": 10,
+    "max_employees": 3000,
+    "industries": ["Healthcare", "Biotech", "Life Sciences", "Medical"],
+    "job_titles": ["CEO", "Founder", "CMO", "CTO", "Chief Medical Officer"],
+    "funding_min": 500000
+  },
+  "ecommerce": {
+    "name": "E-Commerce & Retail",
+    "description": "E-commerce platforms and online retailers",
+    "keywords": ["ecommerce", "e-commerce", "retail", "marketplace", "shopping", "store"],
+    "min_employees": 5,
+    "max_employees": 2000,
+    "industries": ["E-commerce", "Retail", "Marketplace", "Commerce"],
+    "job_titles": ["CEO", "Founder", "COO", "Head of Operations", "VP Growth"],
+    "funding_min": 0
+  },
+  "enterprise": {
+    "name": "Enterprise Software",
+    "description": "Large enterprise software companies",
+    "keywords": ["enterprise", "corporate", "business", "management", "ERP", "CRM"],
+    "min_employees": 500,
+    "max_employees": 50000,
+    "industries": ["Software", "Technology", "Enterprise"],
+    "job_titles": ["VP", "Director", "Head of", "Chief", "Officer"],
+    "funding_min": 10000000
+  },
+  "logistics": {
+    "name": "Logistics & Supply Chain",
+    "description": "Logistics, supply chain, and shipping companies",
+    "keywords": ["logistics", "supply chain", "shipping", "freight", "warehouse"],
+    "min_employees": 50,
+    "max_employees": 10000,
+    "industries": ["Logistics", "Transportation", "Supply Chain"],
+    "job_titles": ["CEO", "COO", "VP Operations", "Head of Logistics"],
+    "funding_min": 0
+  },
+  "edtech": {
+    "name": "EdTech Companies",
+    "description": "Education technology and online learning",
+    "keywords": ["edtech", "education", "learning", "online course", "training", "academy"],
+    "min_employees": 5,
+    "max_employees": 1000,
+    "industries": ["Education", "EdTech", "Technology"],
+    "job_titles": ["CEO", "Founder", "VP Product", "VP Growth", "Chief Content Officer"],
+    "funding_min": 0
+  },
+  "realtech": {
+    "name": "Real Estate Tech",
+    "description": "Real estate and property technology",
+    "keywords": ["real estate", "property", "realtech", "proptech", "mortgage", "reit"],
+    "min_employees": 5,
+    "max_employees": 1000,
+    "industries": ["Real Estate", "RealTech", "Property"],
+    "job_titles": ["CEO", "Founder", "VP Growth", "CMO"],
+    "funding_min": 0
+  }
+}
