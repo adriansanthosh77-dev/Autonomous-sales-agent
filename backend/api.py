@@ -5,10 +5,11 @@ import io
 import json
 import logging
 from datetime import datetime, timedelta
+from itertools import count
 from typing import Any
 
 from anthropic import Anthropic
-from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Header, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 from supabase import create_client
@@ -58,6 +59,34 @@ class LeadOutcome(BaseModel):
     deal_size: float | None = None
 
 
+class DraftApprovalRequest(BaseModel):
+    approved: bool = True
+
+
+class QueueJobRequest(BaseModel):
+    lead_id: int
+    send_at: datetime | None = None
+    channel: str = "email"
+    reason: str = "follow_up"
+
+
+class OperatorActivity(BaseModel):
+    timestamp: str
+    type: str
+    message: str
+    lead_id: int | None = None
+
+
+class QueuedJob(BaseModel):
+    id: int
+    type: str
+    status: str
+    created_at: str
+    send_at: str | None = None
+    lead_id: int | None = None
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
 app = FastAPI(
     title="Autonomous Sales System API",
     description="Production-oriented API for autonomous sales workflows",
@@ -92,6 +121,75 @@ def get_anthropic_client() -> Anthropic | None:
         client = Anthropic(api_key=settings.claude_api_key)
         app.state.anthropic_client = client
     return client
+
+
+def get_runtime_drafts() -> dict[int, dict[str, Any]]:
+    drafts = getattr(app.state, "drafts", None)
+    if drafts is None:
+        drafts = {}
+        app.state.drafts = drafts
+        app.state.draft_ids = count(1)
+    return drafts
+
+
+def next_draft_id() -> int:
+    get_runtime_drafts()
+    return next(app.state.draft_ids)
+
+
+def get_runtime_jobs() -> list[dict[str, Any]]:
+    jobs = getattr(app.state, "jobs", None)
+    if jobs is None:
+        jobs = []
+        app.state.jobs = jobs
+        app.state.job_ids = count(1)
+    return jobs
+
+
+def next_job_id() -> int:
+    get_runtime_jobs()
+    return next(app.state.job_ids)
+
+
+def get_activity_log() -> list[dict[str, Any]]:
+    activities = getattr(app.state, "activities", None)
+    if activities is None:
+        activities = []
+        app.state.activities = activities
+    return activities
+
+
+def record_activity(activity_type: str, message: str, lead_id: int | None = None) -> None:
+    activity = OperatorActivity(
+        timestamp=datetime.utcnow().isoformat(),
+        type=activity_type,
+        message=message,
+        lead_id=lead_id,
+    )
+    activities = get_activity_log()
+    activities.insert(0, activity.model_dump())
+    del activities[100:]
+
+
+def require_operator(x_api_key: str | None = Header(default=None)) -> None:
+    if settings.auth_enabled and x_api_key != settings.secret_key:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+
+
+def queue_job(job_type: str, lead_id: int | None, payload: dict[str, Any], send_at: datetime | None = None) -> dict[str, Any]:
+    job = QueuedJob(
+        id=next_job_id(),
+        type=job_type,
+        status="queued",
+        created_at=datetime.utcnow().isoformat(),
+        send_at=send_at.isoformat() if send_at else None,
+        lead_id=lead_id,
+        payload=payload,
+    )
+    jobs = get_runtime_jobs()
+    jobs.insert(0, job.model_dump())
+    record_activity("job_queued", f"Queued {job_type.replace('_', ' ')}", lead_id=lead_id)
+    return job.model_dump()
 
 
 def build_fallback_draft(lead: dict[str, Any]) -> dict[str, str]:
@@ -228,12 +326,32 @@ async def health() -> dict[str, Any]:
         "storage_mode": store.mode,
         "anthropic_configured": settings.has_anthropic,
         "supabase_configured": settings.has_supabase,
+        "auth_enabled": settings.auth_enabled,
+    }
+
+
+@app.get("/dashboard/summary")
+async def get_dashboard_summary() -> dict[str, Any]:
+    leads = get_store().list_leads(limit=500)
+    replied = [lead for lead in leads if str(lead.get("status", "")).startswith("replied")]
+    qualified = [lead for lead in leads if lead.get("status") == "qualified"]
+    jobs = get_runtime_jobs()
+    return {
+        "totals": {
+            "leads": len(leads),
+            "replied": len(replied),
+            "qualified": len(qualified),
+            "jobs_queued": len([job for job in jobs if job.get("status") == "queued"]),
+        },
+        "conversion": await get_conversion_rates(),
+        "recent_activity": get_activity_log()[:8],
     }
 
 
 @app.post("/leads")
-async def create_lead(lead: Lead) -> dict[str, Any]:
+async def create_lead(lead: Lead, _: None = Depends(require_operator)) -> dict[str, Any]:
     record = get_store().create_lead(lead.model_dump())
+    record_activity("lead_created", f"Added lead for {record['company']}", lead_id=record["id"])
     return {"status": "success", "id": record["id"], "lead": record}
 
 
@@ -248,7 +366,7 @@ async def get_hot_leads(limit: int = Query(default=20, ge=1, le=100)) -> list[di
 
 
 @app.post("/leads/import")
-async def import_leads_csv(file: UploadFile = File(...)) -> dict[str, Any]:
+async def import_leads_csv(file: UploadFile = File(...), _: None = Depends(require_operator)) -> dict[str, Any]:
     contents = await file.read()
     reader = csv.DictReader(io.StringIO(contents.decode()))
     imported = 0
@@ -265,33 +383,71 @@ async def import_leads_csv(file: UploadFile = File(...)) -> dict[str, Any]:
         )
         get_store().create_lead(lead.model_dump())
         imported += 1
+    record_activity("leads_imported", f"Imported {imported} leads from CSV")
     return {"status": "imported", "count": imported}
 
 
 @app.post("/drafts/generate")
-async def generate_draft_endpoint(lead_id: int) -> dict[str, Any]:
+async def generate_draft_endpoint(lead_id: int, _: None = Depends(require_operator)) -> dict[str, Any]:
     lead = get_store().get_lead(lead_id)
     if lead is None:
         raise HTTPException(status_code=404, detail="Lead not found")
 
     draft = await generate_draft(lead)
+    draft_id = next_draft_id()
+    runtime_draft = {
+        "id": draft_id,
+        "lead_id": lead_id,
+        "email_subject": draft.email_subject,
+        "email_body": draft.email_body,
+        "whatsapp": draft.whatsapp,
+        "confidence_score": draft.confidence_score,
+        "channel": draft.channel,
+        "created_at": datetime.utcnow().isoformat(),
+        "status": "pending_approval",
+    }
+    get_runtime_drafts()[draft_id] = runtime_draft
+    record_activity("draft_generated", f"Generated draft for {lead['company']}", lead_id=lead_id)
     return {
-        "draft": draft.model_dump(),
+        "draft": runtime_draft,
         "auto_approved": draft.confidence_score >= 8.0,
         "provider": "anthropic" if settings.has_anthropic else "fallback",
     }
 
 
 @app.post("/drafts/{draft_id}/approve")
-async def approve_draft(draft_id: int, approved: bool, background_tasks: BackgroundTasks) -> dict[str, str]:
-    if approved:
+async def approve_draft(
+    draft_id: int,
+    request: DraftApprovalRequest,
+    background_tasks: BackgroundTasks,
+    _: None = Depends(require_operator),
+) -> dict[str, Any]:
+    draft = get_runtime_drafts().get(draft_id)
+    if draft is None:
+        raise HTTPException(status_code=404, detail="Draft not found")
+
+    if request.approved:
+        draft["status"] = "approved"
         background_tasks.add_task(send_email_stub, draft_id)
-        return {"status": "approved"}
+        job = queue_job("send_outbound", draft["lead_id"], {"draft_id": draft_id, "channel": draft["channel"]})
+        get_store().update_lead(draft["lead_id"], {"status": "outreach_sent"})
+        record_activity("draft_approved", "Approved outbound draft", lead_id=draft["lead_id"])
+        return {"status": "approved", "job": job}
+
+    draft["status"] = "rejected"
+    record_activity("draft_rejected", "Rejected outbound draft", lead_id=draft["lead_id"])
     return {"status": "rejected"}
 
 
+@app.get("/drafts")
+async def list_drafts() -> list[dict[str, Any]]:
+    drafts = list(get_runtime_drafts().values())
+    drafts.sort(key=lambda item: item["id"], reverse=True)
+    return drafts[:50]
+
+
 @app.post("/replies/classify")
-async def classify_reply_endpoint(reply: EmailReply) -> dict[str, Any]:
+async def classify_reply_endpoint(reply: EmailReply, _: None = Depends(require_operator)) -> dict[str, Any]:
     lead = get_store().get_lead(reply.lead_id)
     if lead is None:
         raise HTTPException(status_code=404, detail="Lead not found")
@@ -306,6 +462,7 @@ async def classify_reply_endpoint(reply: EmailReply) -> dict[str, Any]:
             "last_reply_at": reply.received_at.isoformat(),
         },
     )
+    record_activity("reply_classified", f"Classified reply as {result['sentiment']}", lead_id=reply.lead_id)
     return result
 
 
@@ -319,7 +476,7 @@ async def list_replies(limit: int = Query(default=20, ge=1, le=100)) -> list[dic
 
 
 @app.post("/leads/{lead_id}/score")
-async def score_lead_endpoint(lead_id: int) -> dict[str, Any]:
+async def score_lead_endpoint(lead_id: int, _: None = Depends(require_operator)) -> dict[str, Any]:
     lead = get_store().get_lead(lead_id)
     if lead is None:
         raise HTTPException(status_code=404, detail="Lead not found")
@@ -327,11 +484,12 @@ async def score_lead_endpoint(lead_id: int) -> dict[str, Any]:
     lead_score = await score_lead(lead)
     status = "qualified" if lead_score > 7 else "pending"
     get_store().update_lead(lead_id, {"qualification_score": lead_score, "status": status})
+    record_activity("lead_scored", f"Scored lead {lead_score:.1f}", lead_id=lead_id)
     return {"lead_id": lead_id, "score": lead_score, "status": status}
 
 
 @app.post("/outcomes")
-async def log_outcome(outcome: LeadOutcome) -> dict[str, Any]:
+async def log_outcome(outcome: LeadOutcome, _: None = Depends(require_operator)) -> dict[str, Any]:
     lead = get_store().get_lead(outcome.lead_id)
     if lead is None:
         raise HTTPException(status_code=404, detail="Lead not found")
@@ -347,7 +505,32 @@ async def log_outcome(outcome: LeadOutcome) -> dict[str, Any]:
             "timestamp": datetime.utcnow().isoformat(),
         }
     )
+    record_activity("outcome_logged", f"Logged outcome {outcome.status}", lead_id=outcome.lead_id)
     return {"status": "logged", "lead_id": outcome.lead_id}
+
+
+@app.post("/jobs/follow-ups")
+async def queue_follow_up(request: QueueJobRequest, _: None = Depends(require_operator)) -> dict[str, Any]:
+    lead = get_store().get_lead(request.lead_id)
+    if lead is None:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    job = queue_job(
+        "follow_up",
+        request.lead_id,
+        {"channel": request.channel, "reason": request.reason},
+        send_at=request.send_at,
+    )
+    return {"status": "queued", "job": job}
+
+
+@app.get("/jobs")
+async def list_jobs() -> list[dict[str, Any]]:
+    return get_runtime_jobs()[:100]
+
+
+@app.get("/activities")
+async def list_activities() -> list[dict[str, Any]]:
+    return get_activity_log()[:100]
 
 
 @app.get("/metrics/funnel")

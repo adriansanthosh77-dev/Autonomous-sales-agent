@@ -1,6 +1,6 @@
 # Autonomous Sales System - Production-Oriented Foundation
 
-AI-powered GTM automation foundation for lead sourcing, outreach drafting, reply triage, and funnel tracking.
+AI-powered GTM automation foundation for lead sourcing, outreach drafting, reply triage, funnel tracking, and operator review.
 
 ## 🎯 What It Does
 
@@ -78,7 +78,14 @@ npm start
 
 Visit `http://localhost:3000`
 
-Note: the backend API is the most complete part of the repo today. The frontend is still scaffold-level.
+Note: the backend API remains the strongest part of the repo, and the frontend now provides a usable operator console rather than a full CRM-grade product surface.
+
+The current frontend now includes an operator console for:
+- reviewing pipeline metrics
+- creating leads manually
+- generating and approving drafts
+- queuing follow-ups
+- viewing job and activity history
 
 ---
 

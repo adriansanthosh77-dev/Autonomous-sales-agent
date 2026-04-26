@@ -82,7 +82,9 @@ npm install
 npm start
 ```
 
-The frontend folder is still a scaffold, so the backend is the most production-ready part of the repo today.
+The frontend now ships with an operator console, though the backend is still the most production-ready part of the repo today.
+
+The current UI is an operator console that expects `REACT_APP_API_URL` to point at the FastAPI server.
 
 ## Production Deployment
 

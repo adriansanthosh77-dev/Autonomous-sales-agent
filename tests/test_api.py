@@ -62,6 +62,31 @@ def test_generate_draft_and_classify_reply() -> None:
     assert reply_response.json()["sentiment"] == "interested"
 
 
+def test_approve_draft_creates_job() -> None:
+    client = build_client()
+    lead = client.post(
+        "/leads",
+        json={"name": "Maya Cruz", "email": "maya@example.com", "company": "Relay", "title": "CEO"},
+    ).json()["lead"]
+    draft = client.post("/drafts/generate", params={"lead_id": lead["id"]}).json()["draft"]
+
+    approve_response = client.post(f"/drafts/{draft['id']}/approve", json={"approved": True})
+    assert approve_response.status_code == 200
+    assert approve_response.json()["job"]["type"] == "send_outbound"
+
+    jobs_response = client.get("/jobs")
+    assert jobs_response.status_code == 200
+    assert len(jobs_response.json()) == 1
+
+
+def test_dashboard_summary() -> None:
+    client = build_client()
+    client.post("/leads", json={"name": "June Park", "email": "june@example.com", "company": "Helio"})
+    response = client.get("/dashboard/summary")
+    assert response.status_code == 200
+    assert response.json()["totals"]["leads"] == 1
+
+
 def test_funnel_metrics() -> None:
     client = build_client()
     response = client.get("/metrics/funnel")
