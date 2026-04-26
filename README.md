@@ -1,6 +1,6 @@
-# Autonomous Sales System - Production Ready
+# Autonomous Sales System - Production-Oriented Foundation
 
-Complete AI-powered GTM automation system that replaces 1-2 sales reps with intelligent agents.
+AI-powered GTM automation foundation for lead sourcing, outreach drafting, reply triage, and funnel tracking.
 
 ## 🎯 What It Does
 
@@ -66,6 +66,9 @@ python scrapers/multi_source_scraper.py --icp "B2B SaaS" --limit 100
 python -m uvicorn backend.api:app --reload --port 8000
 ```
 
+If `SUPABASE_URL` and `SUPABASE_KEY` are set, the API uses Supabase.
+Without them, it runs with an in-memory store for local development and tests.
+
 ### 5. Start Frontend
 ```bash
 cd frontend
@@ -74,6 +77,8 @@ npm start
 ```
 
 Visit `http://localhost:3000`
+
+Note: the backend API is the most complete part of the repo today. The frontend is still scaffold-level.
 
 ---
 

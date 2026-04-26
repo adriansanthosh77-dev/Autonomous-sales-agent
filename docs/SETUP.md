@@ -9,7 +9,7 @@ Complete step-by-step instructions to get the system running locally and in prod
 - PostgreSQL 15+ or Supabase account
 - Git
 
-## Local Development Setup (5 minutes)
+## Local Development Setup (10 minutes)
 
 ### 1. Clone Repository
 
@@ -38,11 +38,11 @@ cp .env.example .env
 # Edit .env with your API keys
 ```
 
-### 5a. Option A: Docker (Recommended)
+### 5a. Option A: Docker (Recommended for full stack)
 
 ```bash
 docker-compose up
-# Starts: PostgreSQL, Redis, Backend, Frontend
+# Starts: PostgreSQL, Redis, Backend, Frontend scaffold
 # Frontend: http://localhost:3000
 # Backend API: http://localhost:8000
 # Docs: http://localhost:8000/docs
@@ -69,6 +69,11 @@ psql $SUPABASE_CONNECTION_STRING < migrations/001_initial_schema.sql
 python -m uvicorn backend.api:app --reload --port 8000
 ```
 
+The backend supports two modes:
+
+- With `SUPABASE_URL` and `SUPABASE_KEY`, it uses Supabase tables.
+- Without them, it falls back to an in-memory store for local development and tests.
+
 #### Start Frontend
 
 ```bash
@@ -76,6 +81,8 @@ cd frontend
 npm install
 npm start
 ```
+
+The frontend folder is still a scaffold, so the backend is the most production-ready part of the repo today.
 
 ## Production Deployment
 

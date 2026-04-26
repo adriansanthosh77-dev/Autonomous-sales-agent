@@ -1,57 +1,38 @@
-"""
-FastAPI Backend - Autonomous Sales System
-==========================================
-Main server handling all agents, integrations, and business logic.
+from __future__ import annotations
 
-Start: python -m uvicorn backend.api:app --reload --port 8000
-"""
-
-from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from typing import Optional, List
-from datetime import datetime, timedelta
-import os
+import csv
+import io
 import json
 import logging
-from dotenv import load_dotenv
+from datetime import datetime, timedelta
+from typing import Any
 
-# Integrations
 from anthropic import Anthropic
-from supabase import create_client, Client
-import aiohttp
+from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Query, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from supabase import create_client
 
-load_dotenv()
+from backend.config import settings
+from backend.storage import InMemoryLeadStore, LeadStore, SupabaseLeadStore
 
-# ─────────────────────────────────────────────
-# CONFIG
-# ─────────────────────────────────────────────
-
-CLAUDE_API_KEY = os.getenv("CLAUDE_API_KEY")
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-claude_client = Anthropic(api_key=CLAUDE_API_KEY)
-
-# Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ─────────────────────────────────────────────
-# PYDANTIC MODELS
-# ─────────────────────────────────────────────
 
 class Lead(BaseModel):
-    name: str
-    email: str
-    phone: Optional[str] = None
-    company: str
-    website: Optional[str] = None
-    title: Optional[str] = None
-    industry: Optional[str] = None
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    name: str = Field(min_length=1)
+    email: EmailStr
+    company: str = Field(min_length=1)
+    phone: str | None = None
+    website: str | None = None
+    title: str | None = None
+    industry: str | None = None
     source: str = "manual"
     status: str = "pending"
+
 
 class OutboundDraft(BaseModel):
     lead_id: int
@@ -59,402 +40,335 @@ class OutboundDraft(BaseModel):
     email_body: str
     whatsapp: str
     confidence_score: float
-    channel: str
+    channel: str = "email"
+
 
 class EmailReply(BaseModel):
     lead_id: int
-    from_email: str
+    from_email: EmailStr
     subject: str
     body: str
     received_at: datetime
-    sentiment: Optional[str] = None
+
 
 class LeadOutcome(BaseModel):
     lead_id: int
     status: str
-    deal_size: Optional[float] = None
-    notes: str
+    notes: str = Field(min_length=1)
+    deal_size: float | None = None
 
-# ─────────────────────────────────────────────
-# FASTAPI APP
-# ─────────────────────────────────────────────
 
 app = FastAPI(
     title="Autonomous Sales System API",
-    description="AI-powered GTM automation",
-    version="1.0.0"
+    description="Production-oriented API for autonomous sales workflows",
+    version="1.1.0",
 )
 
-# CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ─────────────────────────────────────────────
-# DRAFT GENERATION (with caching)
-# ─────────────────────────────────────────────
+_draft_cache: dict[str, dict[str, str]] = {}
 
-_draft_cache = {}  # In production: use Redis
 
-async def generate_draft(lead: dict) -> OutboundDraft:
-    """Generate email/WhatsApp draft with caching."""
-    
-    cache_key = f"{lead.get('title', '')}_{lead.get('industry', '')}"
-    
-    # Check cache (80-90% hit rate)
+def get_store() -> LeadStore:
+    store = getattr(app.state, "store", None)
+    if store is None:
+        if settings.has_supabase:
+            store = SupabaseLeadStore(create_client(settings.supabase_url, settings.supabase_key))
+        else:
+            store = InMemoryLeadStore()
+        app.state.store = store
+    return store
+
+
+def get_anthropic_client() -> Anthropic | None:
+    client = getattr(app.state, "anthropic_client", None)
+    if client is None and settings.has_anthropic:
+        client = Anthropic(api_key=settings.claude_api_key)
+        app.state.anthropic_client = client
+    return client
+
+
+def build_fallback_draft(lead: dict[str, Any]) -> dict[str, str]:
+    first_name = lead.get("name", "there").split()[0]
+    company = lead.get("company", "your team")
+    title = lead.get("title") or "your role"
+    return {
+        "email_subject": f"Idea for {company}'s pipeline",
+        "email_body": (
+            f"Hi {first_name},\n\n"
+            f"I noticed your work as {title} at {company}. We help teams save time on outbound prospecting and follow-up.\n\n"
+            "If useful, I can share a short breakdown of how teams automate lead research and first-touch drafting without losing personalization.\n\n"
+            "Would a quick look be helpful?"
+        ),
+        "whatsapp": (
+            f"Hi {first_name}, quick idea for helping {company} automate lead follow-up "
+            "without sounding robotic. Worth sending details?"
+        ),
+    }
+
+
+async def generate_draft(lead: dict[str, Any]) -> OutboundDraft:
+    cache_key = f"{lead.get('title', '')}:{lead.get('industry', '')}:{lead.get('source', '')}"
     if cache_key in _draft_cache:
         template = _draft_cache[cache_key]
-        email_body = template["email_body"].replace("[NAME]", lead["name"]).replace("[COMPANY]", lead["company"])
-        whatsapp = template["whatsapp"].replace("[NAME]", lead["name"]).replace("[COMPANY]", lead["company"])
         return OutboundDraft(
             lead_id=lead.get("id", 0),
             email_subject=template["email_subject"],
-            email_body=email_body,
-            whatsapp=whatsapp,
-            confidence_score=8.5,
-            channel="email"
+            email_body=template["email_body"].replace("[NAME]", lead.get("name", "")).replace("[COMPANY]", lead.get("company", "")),
+            whatsapp=template["whatsapp"].replace("[NAME]", lead.get("name", "")).replace("[COMPANY]", lead.get("company", "")),
+            confidence_score=8.2,
         )
-    
-    # Generate new draft
-    system_prompt = """You are an expert outbound sales copywriter.
-    Write conversational, friendly messages. Never sound like a bot.
-    Emails: <120 words. WhatsApp: <60 words.
-    Use [NAME] and [COMPANY] for personalization.
-    Respond ONLY with valid JSON."""
-    
-    user_prompt = f"""Write outbound messages for:
-    Name: {lead.get('name')}
-    Title: {lead.get('title')}
-    Company: {lead.get('company')}
-    Industry: {lead.get('industry')}
-    
-    Return ONLY:
-    {{"email_subject": "...", "email_body": "...", "whatsapp": "..."}}"""
-    
-    try:
-        response = claude_client.messages.create(
-            model="claude-opus-4-20250805",
-            max_tokens=500,
-            system=system_prompt,
-            messages=[{"role": "user", "content": user_prompt}]
-        )
-        
-        text = response.content[0].text.replace("```json", "").replace("```", "").strip()
-        data = json.loads(text)
-        
-        # Cache the template
-        _draft_cache[cache_key] = data
-        
-        # Personalize
-        email_body = data["email_body"].replace("[NAME]", lead.get("name", "")).replace("[COMPANY]", lead.get("company", ""))
-        whatsapp = data["whatsapp"].replace("[NAME]", lead.get("name", "")).replace("[COMPANY]", lead.get("company", ""))
-        
-        return OutboundDraft(
-            lead_id=lead.get("id", 0),
-            email_subject=data["email_subject"],
-            email_body=email_body,
-            whatsapp=whatsapp,
-            confidence_score=7.5,
-            channel="email"
-        )
-    except Exception as e:
-        logger.error(f"Draft generation failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
 
-# ─────────────────────────────────────────────
-# REPLY CLASSIFICATION
-# ─────────────────────────────────────────────
-
-async def classify_reply(reply: EmailReply) -> dict:
-    """Classify email reply sentiment."""
-    
-    system_prompt = """Analyze email sentiment.
-    Return JSON: {"sentiment": "interested|not_now|objection|spam", "confidence": 0-1, "key_points": ["..."], "suggested_response": "..."}"""
-    
-    user_prompt = f"""Classify this reply:
-    From: {reply.from_email}
-    Subject: {reply.subject}
-    Body: {reply.body}"""
-    
-    try:
-        response = claude_client.messages.create(
-            model="claude-opus-4-20250805",
+    client = get_anthropic_client()
+    if client is None:
+        template = build_fallback_draft(lead)
+    else:
+        response = client.messages.create(
+            model="claude-3-5-sonnet-latest",
             max_tokens=300,
-            system=system_prompt,
-            messages=[{"role": "user", "content": user_prompt}]
+            system=(
+                "You write concise B2B outbound copy. "
+                "Return valid JSON with email_subject, email_body, whatsapp. "
+                "Use [NAME] and [COMPANY] as placeholders."
+            ),
+            messages=[
+                {
+                    "role": "user",
+                    "content": (
+                        f"Name: {lead.get('name')}\n"
+                        f"Title: {lead.get('title')}\n"
+                        f"Company: {lead.get('company')}\n"
+                        f"Industry: {lead.get('industry')}"
+                    ),
+                }
+            ],
         )
-        
         text = response.content[0].text.replace("```json", "").replace("```", "").strip()
-        data = json.loads(text)
-        
-        # Update lead status
-        new_status = "replied_interested" if data["sentiment"] == "interested" else f"replied_{data['sentiment']}"
-        supabase.table("leads").update({
-            "status": new_status,
-            "last_reply_sentiment": data["sentiment"],
-            "last_reply_at": datetime.utcnow().isoformat()
-        }).eq("id", reply.lead_id).execute()
-        
-        return data
-    except Exception as e:
-        logger.error(f"Classification failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        template = json.loads(text)
 
-# ─────────────────────────────────────────────
-# LEAD SCORING
-# ─────────────────────────────────────────────
+    normalized_template = {
+        "email_subject": template["email_subject"],
+        "email_body": template["email_body"].replace(lead.get("name", ""), "[NAME]").replace(lead.get("company", ""), "[COMPANY]"),
+        "whatsapp": template["whatsapp"].replace(lead.get("name", ""), "[NAME]").replace(lead.get("company", ""), "[COMPANY]"),
+    }
+    _draft_cache[cache_key] = normalized_template
 
-async def score_lead(lead: dict) -> float:
-    """Score lead 0-10 based on engagement."""
-    
-    score = 5.0  # Base score
-    
-    # Engagement signals
+    return OutboundDraft(
+        lead_id=lead.get("id", 0),
+        email_subject=template["email_subject"],
+        email_body=template["email_body"],
+        whatsapp=template["whatsapp"],
+        confidence_score=7.8 if client else 6.5,
+    )
+
+
+async def classify_reply(reply: EmailReply) -> dict[str, Any]:
+    body = reply.body.lower()
+    sentiment = "objection"
+    confidence = 0.65
+    suggested_response = "Acknowledge the concern and ask one clarifying question."
+
+    if any(token in body for token in ["interested", "sounds good", "let's talk", "book", "meeting"]):
+        sentiment = "interested"
+        confidence = 0.9
+        suggested_response = "Offer two concrete meeting times and include a booking link."
+    elif any(token in body for token in ["later", "next quarter", "not now"]):
+        sentiment = "not_now"
+        confidence = 0.84
+        suggested_response = "Thank them, ask for timing, and schedule a lighter follow-up."
+    elif any(token in body for token in ["unsubscribe", "stop", "remove me"]):
+        sentiment = "spam"
+        confidence = 0.95
+        suggested_response = "Do not follow up again."
+
+    return {
+        "sentiment": sentiment,
+        "confidence": confidence,
+        "key_points": [reply.subject.strip() or "No subject"],
+        "suggested_response": suggested_response,
+    }
+
+
+async def score_lead(lead: dict[str, Any]) -> float:
+    score = 5.0
     if lead.get("last_reply_sentiment") == "interested":
         score += 3.0
     elif lead.get("last_reply_sentiment") == "not_now":
         score -= 1.0
-    
-    # Activity recency (within 24h = +2)
-    if lead.get("last_reply_at"):
-        delta = datetime.utcnow() - datetime.fromisoformat(lead["last_reply_at"])
-        if delta < timedelta(hours=24):
-            score += 2.0
-    
-    # Replies received (+1)
-    if lead.get("status", "").startswith("replied"):
-        score += 1.0
-    
-    # Return bounded score
-    return max(0, min(10, score))
 
-# ─────────────────────────────────────────────
-# ENDPOINTS
-# ─────────────────────────────────────────────
+    last_reply_at = lead.get("last_reply_at")
+    if last_reply_at:
+        parsed = datetime.fromisoformat(str(last_reply_at).replace("Z", "+00:00"))
+        if datetime.utcnow() - parsed.replace(tzinfo=None) < timedelta(hours=24):
+            score += 2.0
+
+    if str(lead.get("status", "")).startswith("replied"):
+        score += 1.0
+
+    return max(0.0, min(10.0, score))
+
+
+async def send_email_stub(draft_id: int) -> None:
+    logger.info("Queued draft %s for delivery", draft_id)
+
 
 @app.get("/health")
-async def health():
-    """Health check."""
-    return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
+async def health() -> dict[str, Any]:
+    store = get_store()
+    return {
+        "status": "healthy",
+        "timestamp": datetime.utcnow().isoformat(),
+        "environment": settings.environment,
+        "storage_mode": store.mode,
+        "anthropic_configured": settings.has_anthropic,
+        "supabase_configured": settings.has_supabase,
+    }
 
-# ─────────────────────────────────────────────
-# LEAD ENDPOINTS
-# ─────────────────────────────────────────────
 
 @app.post("/leads")
-async def create_lead(lead: Lead):
-    """Create a new lead."""
-    try:
-        response = supabase.table("leads").insert(lead.dict()).execute()
-        return {"status": "success", "id": response.data[0]["id"]}
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+async def create_lead(lead: Lead) -> dict[str, Any]:
+    record = get_store().create_lead(lead.model_dump())
+    return {"status": "success", "id": record["id"], "lead": record}
+
 
 @app.get("/leads")
-async def list_leads(status: Optional[str] = None, limit: int = 50):
-    """Get leads."""
-    try:
-        query = supabase.table("leads").select("*").limit(limit)
-        if status:
-            query = query.eq("status", status)
-        response = query.execute()
-        return response.data
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+async def list_leads(status: str | None = None, limit: int = Query(default=50, ge=1, le=500)) -> list[dict[str, Any]]:
+    return get_store().list_leads(status=status, limit=limit)
+
 
 @app.get("/leads/hot")
-async def get_hot_leads(limit: int = 20):
-    """Get hot leads (qualified)."""
-    try:
-        response = supabase.table("leads").select("*").eq("status", "qualified").limit(limit).execute()
-        return response.data
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+async def get_hot_leads(limit: int = Query(default=20, ge=1, le=100)) -> list[dict[str, Any]]:
+    return get_store().list_leads(status="qualified", limit=limit)
 
-@app.post("/leads/{lead_id}/import")
-async def import_leads_csv(file: UploadFile = File(...)):
-    """Bulk import leads from CSV."""
-    import csv
-    try:
-        contents = await file.read()
-        lines = contents.decode().split('\n')
-        reader = csv.DictReader(lines)
-        
-        leads = []
-        for row in reader:
-            if row.get('email'):
-                leads.append({
-                    "name": row.get('name', ''),
-                    "email": row.get('email'),
-                    "company": row.get('company', ''),
-                    "title": row.get('title', ''),
-                    "industry": row.get('industry', ''),
-                    "source": "csv_import"
-                })
-        
-        supabase.table("leads").insert(leads).execute()
-        return {"status": "imported", "count": len(leads)}
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
 
-# ─────────────────────────────────────────────
-# DRAFT ENDPOINTS
-# ─────────────────────────────────────────────
+@app.post("/leads/import")
+async def import_leads_csv(file: UploadFile = File(...)) -> dict[str, Any]:
+    contents = await file.read()
+    reader = csv.DictReader(io.StringIO(contents.decode()))
+    imported = 0
+    for row in reader:
+        if not row.get("email"):
+            continue
+        lead = Lead(
+            name=row.get("name") or "Unknown",
+            email=row["email"],
+            company=row.get("company") or "Unknown",
+            title=row.get("title"),
+            industry=row.get("industry"),
+            source="csv_import",
+        )
+        get_store().create_lead(lead.model_dump())
+        imported += 1
+    return {"status": "imported", "count": imported}
+
 
 @app.post("/drafts/generate")
-async def generate_draft_endpoint(lead_id: int):
-    """Generate draft for a lead."""
-    try:
-        # Get lead
-        response = supabase.table("leads").select("*").eq("id", lead_id).execute()
-        if not response.data:
-            raise HTTPException(status_code=404, detail="Lead not found")
-        
-        lead = response.data[0]
-        draft = await generate_draft(lead)
-        
-        # Auto-approve if high confidence
-        if draft.confidence_score > 8.0:
-            return {"draft": draft.dict(), "auto_approved": True}
-        
-        return {"draft": draft.dict(), "awaiting_approval": True}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+async def generate_draft_endpoint(lead_id: int) -> dict[str, Any]:
+    lead = get_store().get_lead(lead_id)
+    if lead is None:
+        raise HTTPException(status_code=404, detail="Lead not found")
+
+    draft = await generate_draft(lead)
+    return {
+        "draft": draft.model_dump(),
+        "auto_approved": draft.confidence_score >= 8.0,
+        "provider": "anthropic" if settings.has_anthropic else "fallback",
+    }
+
 
 @app.post("/drafts/{draft_id}/approve")
-async def approve_draft(draft_id: int, approved: bool, background_tasks: BackgroundTasks):
-    """Approve or reject a draft."""
+async def approve_draft(draft_id: int, approved: bool, background_tasks: BackgroundTasks) -> dict[str, str]:
     if approved:
-        # Queue for sending (TODO: Gmail integration)
         background_tasks.add_task(send_email_stub, draft_id)
         return {"status": "approved"}
-    else:
-        return {"status": "rejected"}
+    return {"status": "rejected"}
 
-async def send_email_stub(draft_id: int):
-    """Stub for sending email (TODO: integrate Gmail API)."""
-    logger.info(f"Sending draft {draft_id}")
-    # TODO: Implement Gmail API send
-
-# ─────────────────────────────────────────────
-# REPLY ENDPOINTS
-# ─────────────────────────────────────────────
 
 @app.post("/replies/classify")
-async def classify_reply_endpoint(reply: EmailReply):
-    """Classify an incoming reply."""
-    try:
-        result = await classify_reply(reply)
-        return result
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+async def classify_reply_endpoint(reply: EmailReply) -> dict[str, Any]:
+    lead = get_store().get_lead(reply.lead_id)
+    if lead is None:
+        raise HTTPException(status_code=404, detail="Lead not found")
+
+    result = await classify_reply(reply)
+    new_status = "replied_interested" if result["sentiment"] == "interested" else f"replied_{result['sentiment']}"
+    get_store().update_lead(
+        reply.lead_id,
+        {
+            "status": new_status,
+            "last_reply_sentiment": result["sentiment"],
+            "last_reply_at": reply.received_at.isoformat(),
+        },
+    )
+    return result
+
 
 @app.get("/replies")
-async def list_replies(limit: int = 20):
-    """Get recent replies."""
-    try:
-        response = supabase.table("leads").select("*").eq("status", "replied").limit(limit).execute()
-        return response.data
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+async def list_replies(limit: int = Query(default=20, ge=1, le=100)) -> list[dict[str, Any]]:
+    replied_statuses = ["replied_interested", "replied_not_now", "replied_objection", "replied_spam"]
+    results: list[dict[str, Any]] = []
+    for status in replied_statuses:
+        results.extend(get_store().list_leads(status=status, limit=limit))
+    return results[:limit]
 
-# ─────────────────────────────────────────────
-# SCORING ENDPOINTS
-# ─────────────────────────────────────────────
 
 @app.post("/leads/{lead_id}/score")
-async def score_lead_endpoint(lead_id: int):
-    """Score a lead."""
-    try:
-        response = supabase.table("leads").select("*").eq("id", lead_id).execute()
-        if not response.data:
-            raise HTTPException(status_code=404, detail="Lead not found")
-        
-        lead = response.data[0]
-        score = await score_lead(lead)
-        
-        # Update lead
-        supabase.table("leads").update({
-            "qualification_score": score,
-            "status": "qualified" if score > 7 else "pending"
-        }).eq("id", lead_id).execute()
-        
-        return {"lead_id": lead_id, "score": score, "status": "qualified" if score > 7 else "pending"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+async def score_lead_endpoint(lead_id: int) -> dict[str, Any]:
+    lead = get_store().get_lead(lead_id)
+    if lead is None:
+        raise HTTPException(status_code=404, detail="Lead not found")
 
-# ─────────────────────────────────────────────
-# OUTCOME ENDPOINTS
-# ─────────────────────────────────────────────
+    lead_score = await score_lead(lead)
+    status = "qualified" if lead_score > 7 else "pending"
+    get_store().update_lead(lead_id, {"qualification_score": lead_score, "status": status})
+    return {"lead_id": lead_id, "score": lead_score, "status": status}
+
 
 @app.post("/outcomes")
-async def log_outcome(outcome: LeadOutcome):
-    """Log deal outcome."""
-    try:
-        supabase.table("leads").update({
-            "status": f"closed_{outcome.status}",
-            "closed_at": datetime.utcnow().isoformat()
-        }).eq("id", outcome.lead_id).execute()
-        
-        supabase.table("outcomes").insert({
+async def log_outcome(outcome: LeadOutcome) -> dict[str, Any]:
+    lead = get_store().get_lead(outcome.lead_id)
+    if lead is None:
+        raise HTTPException(status_code=404, detail="Lead not found")
+
+    closed_status = f"closed_{outcome.status}"
+    get_store().update_lead(outcome.lead_id, {"status": closed_status, "closed_at": datetime.utcnow().isoformat()})
+    get_store().create_outcome(
+        {
             "lead_id": outcome.lead_id,
             "status": outcome.status,
             "deal_size": outcome.deal_size,
             "notes": outcome.notes,
-            "timestamp": datetime.utcnow().isoformat()
-        }).execute()
-        
-        return {"status": "logged"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+    )
+    return {"status": "logged", "lead_id": outcome.lead_id}
 
-# ─────────────────────────────────────────────
-# METRICS ENDPOINTS
-# ─────────────────────────────────────────────
 
 @app.get("/metrics/funnel")
-async def get_funnel_metrics():
-    """Get conversion funnel."""
-    try:
-        statuses = ["outreach_sent", "replied_interested", "qualified", "booked", "closed_won"]
-        funnel = {}
-        
-        for status in statuses:
-            response = supabase.table("leads").select("id", count="exact").eq("status", status).execute()
-            funnel[status] = response.count or 0
-        
-        return funnel
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+async def get_funnel_metrics() -> dict[str, int]:
+    statuses = ["outreach_sent", "replied_interested", "qualified", "booked", "closed_won"]
+    return {status: get_store().count_leads_by_status(status) for status in statuses}
+
 
 @app.get("/metrics/conversion")
-async def get_conversion_rates():
-    """Get conversion rates by stage."""
-    try:
-        metrics = await get_funnel_metrics()
-        
-        total = sum(metrics.values()) or 1
-        reply_rate = (metrics.get("replied_interested", 0) / (metrics.get("outreach_sent", 0) or 1)) * 100
-        qualify_rate = (metrics.get("qualified", 0) / (metrics.get("replied_interested", 0) or 1)) * 100
-        close_rate = (metrics.get("closed_won", 0) / (metrics.get("booked", 0) or 1)) * 100
-        
-        return {
-            "reply_rate": round(reply_rate, 2),
-            "qualify_rate": round(qualify_rate, 2),
-            "close_rate": round(close_rate, 2),
-            "total_leads": total
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+async def get_conversion_rates() -> dict[str, float]:
+    metrics = await get_funnel_metrics()
+    total = sum(metrics.values())
+    return {
+        "reply_rate": round((metrics["replied_interested"] / (metrics["outreach_sent"] or 1)) * 100, 2),
+        "qualify_rate": round((metrics["qualified"] / (metrics["replied_interested"] or 1)) * 100, 2),
+        "close_rate": round((metrics["closed_won"] / (metrics["booked"] or 1)) * 100, 2),
+        "total_leads": total,
+    }
 
-# ─────────────────────────────────────────────
-# RUN
-# ─────────────────────────────────────────────
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+
+    uvicorn.run(app, host="0.0.0.0", port=settings.backend_port)
