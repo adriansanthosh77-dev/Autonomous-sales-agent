@@ -11,7 +11,7 @@ tqdm==4.66.1
 google-auth-oauthlib==1.2.0
 google-auth-httplib2==0.2.0
 google-api-python-client==2.107.0
-pydantic==2.5.0
+pydantic==2.13.3
 lxml==4.9.3
 selenium==4.15.2
 playwright==1.40.0
