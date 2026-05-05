@@ -6,9 +6,6 @@ AI-powered GTM automation foundation for lead sourcing, outreach drafting, reply
 
 This repository now includes a production-style MCP server in `mcp_server/`. MCP, or Model Context Protocol, is the tool layer that lets Claude discover and call business capabilities at runtime. Instead of hardcoding Gmail, WhatsApp, Google Sheets, Ads, Analytics, Contentful, Iterable, and Trigger.dev orchestration into every agent prompt, Claude gets a stable catalog of tools with clear inputs, validation, retry boundaries, dry-run behavior, and provider-specific implementation modules.
 
-The interview positioning is simple:
-
-> I built a multi-agent autonomous sales system and upgraded it into a full MCP server architecture where Claude dynamically accesses CRM, outreach, analytics, growth, lifecycle, and automation systems across the business stack.
 
 ### Why MCP Beats Direct API Orchestration
 
