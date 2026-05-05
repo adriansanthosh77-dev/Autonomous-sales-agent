@@ -42,7 +42,13 @@ class MCPSettings:
 
     hunter_api_key: str | None = os.getenv("HUNTER_API_KEY")
     apollo_api_key: str | None = os.getenv("APOLLO_API_KEY")
+    apollo_base_url: str = os.getenv("APOLLO_BASE_URL", "https://api.apollo.io/v1")
     clearbit_api_key: str | None = os.getenv("CLEARBIT_API_KEY")
+    clearbit_base_url: str = os.getenv("CLEARBIT_BASE_URL", "https://company.clearbit.com/v2")
+    linkedin_email: str | None = os.getenv("LINKEDIN_EMAIL")
+    linkedin_password: str | None = os.getenv("LINKEDIN_PASSWORD")
+    serpapi_api_key: str | None = os.getenv("SERPAPI_API_KEY")
+    crunchbase_api_key: str | None = os.getenv("CRUNCHBASE_API_KEY")
 
     google_ads_developer_token: str | None = os.getenv("GOOGLE_ADS_DEVELOPER_TOKEN")
     google_ads_customer_id: str | None = os.getenv("GOOGLE_ADS_CUSTOMER_ID")
@@ -63,6 +69,34 @@ class MCPSettings:
 
     iterable_api_key: str | None = os.getenv("ITERABLE_API_KEY")
     iterable_base_url: str = os.getenv("ITERABLE_BASE_URL", "https://api.iterable.com/api")
+    customerio_api_key: str | None = os.getenv("CUSTOMERIO_API_KEY")
+    mailchimp_api_key: str | None = os.getenv("MAILCHIMP_API_KEY")
+    sendgrid_api_key: str | None = os.getenv("SENDGRID_API_KEY")
+    calendly_api_key: str | None = os.getenv("CALENDLY_API_KEY")
+    hubspot_access_token: str | None = os.getenv("HUBSPOT_ACCESS_TOKEN")
+    salesforce_instance_url: str | None = os.getenv("SALESFORCE_INSTANCE_URL")
+    salesforce_access_token: str | None = os.getenv("SALESFORCE_ACCESS_TOKEN")
+    slack_bot_token: str | None = os.getenv("SLACK_BOT_TOKEN")
+    slack_revenue_channel_id: str | None = os.getenv("SLACK_REVENUE_CHANNEL_ID")
+    stripe_api_key: str | None = os.getenv("STRIPE_API_KEY")
+    chargebee_site: str | None = os.getenv("CHARGEBEE_SITE")
+    chargebee_api_key: str | None = os.getenv("CHARGEBEE_API_KEY")
+    segment_write_key: str | None = os.getenv("SEGMENT_WRITE_KEY")
+    posthog_api_key: str | None = os.getenv("POSTHOG_API_KEY")
+    posthog_host: str = os.getenv("POSTHOG_HOST", "https://app.posthog.com")
+    mixpanel_api_secret: str | None = os.getenv("MIXPANEL_API_SECRET")
+    amplitude_api_key: str | None = os.getenv("AMPLITUDE_API_KEY")
+    amplitude_secret_key: str | None = os.getenv("AMPLITUDE_SECRET_KEY")
+    hotjar_site_id: str | None = os.getenv("HOTJAR_SITE_ID")
+    hotjar_api_key: str | None = os.getenv("HOTJAR_API_KEY")
+    ahrefs_api_key: str | None = os.getenv("AHREFS_API_KEY")
+    semrush_api_key: str | None = os.getenv("SEMRUSH_API_KEY")
+    optimizely_api_key: str | None = os.getenv("OPTIMIZELY_API_KEY")
+    launchdarkly_api_key: str | None = os.getenv("LAUNCHDARKLY_API_KEY")
+    zendesk_subdomain: str | None = os.getenv("ZENDESK_SUBDOMAIN")
+    zendesk_api_token: str | None = os.getenv("ZENDESK_API_TOKEN")
+    intercom_access_token: str | None = os.getenv("INTERCOM_ACCESS_TOKEN")
+    typeform_api_key: str | None = os.getenv("TYPEFORM_API_KEY")
 
     triggerdev_api_key: str | None = os.getenv("TRIGGERDEV_API_KEY")
     triggerdev_base_url: str = os.getenv("TRIGGERDEV_BASE_URL", "https://api.trigger.dev")
@@ -79,4 +113,3 @@ class MCPSettings:
 @lru_cache
 def get_settings() -> MCPSettings:
     return MCPSettings()
-
