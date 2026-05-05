@@ -1,8 +1,8 @@
-fastapi==0.104.1
+fastapi==0.136.1
 uvicorn==0.24.0
 python-dotenv==1.0.0
 anthropic==0.25.0
-supabase==2.3.4
+supabase==2.29.0
 aiohttp==3.9.1
 beautifulsoup4==4.12.2
 requests==2.31.0
@@ -11,7 +11,7 @@ tqdm==4.66.1
 google-auth-oauthlib==1.2.0
 google-auth-httplib2==0.2.0
 google-api-python-client==2.107.0
-pydantic==2.5.0
+pydantic==2.13.3
 lxml==4.9.3
 selenium==4.15.2
 playwright==1.40.0

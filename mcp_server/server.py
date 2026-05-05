@@ -15,7 +15,7 @@ from mcp_server.growth import (
     iterable_tools,
     meta_ads_tools,
 )
-from mcp_server.infra import scheduler, triggerdev_tools, webhook_handler
+from mcp_server.infra import agent_api_tools, agent_tools, scheduler, triggerdev_tools, webhook_handler
 from mcp_server.utils.logger import configure_logging
 
 
@@ -37,6 +37,8 @@ def build_mcp_server(settings: MCPSettings | None = None) -> FastMCP:
         gtm_tools,
         contentful_tools,
         iterable_tools,
+        agent_tools,
+        agent_api_tools,
         triggerdev_tools,
         webhook_handler,
         scheduler,
@@ -52,4 +54,3 @@ mcp = build_mcp_server()
 
 if __name__ == "__main__":
     mcp.run()
-

@@ -29,6 +29,17 @@ autonomous-sales-system/
 └── tests/test_mcp_server.py        # MCP smoke test
 ```
 
+### Agent Layer
+
+The repo now has an explicit agent registry in `agents/registry.py` with 30 business agents and 2 engines:
+
+- `Outbound Engine`: lead sourcing, qualification, personalization, outreach execution, follow-up strategy, meeting booking, CRM updates, and ICP refinement.
+- `Inbound Engine`: reply classification, inbound intent, revenue friction, churn prevention, expansion revenue, lifecycle automation, and CRM updates.
+
+Claude can inspect and route agents through MCP tools: `list_business_agents`, `get_business_agent`, `route_agent_task`, and `list_agent_engines`.
+
+Each business agent also has a provider API contract in `agents/api_catalog.py`. The MCP server exposes 30 agent-specific API tools, such as `search_apollo_prospects`, `sync_hubspot_contact`, `create_calendly_invite`, `pull_stripe_revenue_events`, `pull_hotjar_friction_signals`, and `send_slack_founder_report`. These tools run in dry-run mode by default and become live integrations when `MCP_DRY_RUN=false` and the required provider credentials are configured.
+
 ### Available MCP Tool Surface
 
 Core sales and CRM tools:
