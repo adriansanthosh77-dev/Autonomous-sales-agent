@@ -28,6 +28,12 @@ class LeadStore:
     def count_leads_by_status(self, status: str) -> int:
         raise NotImplementedError
 
+    def create_outbound_message(self, message: dict[str, Any]) -> dict[str, Any]:
+        raise NotImplementedError
+
+    def list_outbound_messages(self, limit: int = 50) -> list[dict[str, Any]]:
+        raise NotImplementedError
+
 
 class InMemoryLeadStore(LeadStore):
     mode = "memory"
@@ -35,8 +41,10 @@ class InMemoryLeadStore(LeadStore):
     def __init__(self) -> None:
         self._leads: list[dict[str, Any]] = []
         self._outcomes: list[dict[str, Any]] = []
+        self._outbound_messages: list[dict[str, Any]] = []
         self._next_lead_id = 1
         self._next_outcome_id = 1
+        self._next_outbound_id = 1
 
     def create_lead(self, lead: dict[str, Any]) -> dict[str, Any]:
         now = datetime.utcnow().isoformat()
@@ -80,6 +88,18 @@ class InMemoryLeadStore(LeadStore):
     def count_leads_by_status(self, status: str) -> int:
         return sum(1 for lead in self._leads if lead.get("status") == status)
 
+    def create_outbound_message(self, message: dict[str, Any]) -> dict[str, Any]:
+        record = deepcopy(message)
+        record["id"] = self._next_outbound_id
+        record.setdefault("created_at", datetime.utcnow().isoformat())
+        self._next_outbound_id += 1
+        self._outbound_messages.append(record)
+        return deepcopy(record)
+
+    def list_outbound_messages(self, limit: int = 50) -> list[dict[str, Any]]:
+        messages = list(reversed(self._outbound_messages))
+        return deepcopy(messages[:limit])
+
 
 class SupabaseLeadStore(LeadStore):
     mode = "supabase"
@@ -110,3 +130,11 @@ class SupabaseLeadStore(LeadStore):
     def count_leads_by_status(self, status: str) -> int:
         response = self.client.table("leads").select("id", count="exact").eq("status", status).execute()
         return response.count or 0
+
+    def create_outbound_message(self, message: dict[str, Any]) -> dict[str, Any]:
+        response = self.client.table("outbound_messages").insert(message).execute()
+        return response.data[0]
+
+    def list_outbound_messages(self, limit: int = 50) -> list[dict[str, Any]]:
+        response = self.client.table("outbound_messages").select("*").limit(limit).execute()
+        return response.data

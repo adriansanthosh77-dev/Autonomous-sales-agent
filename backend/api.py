@@ -4,7 +4,9 @@ import csv
 import io
 import json
 import logging
+import smtplib
 from datetime import datetime, timedelta
+from email.message import EmailMessage
 from itertools import count
 from typing import Any
 
@@ -85,6 +87,13 @@ class QueuedJob(BaseModel):
     send_at: str | None = None
     lead_id: int | None = None
     payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class DeliveryResult(BaseModel):
+    status: str
+    provider: str
+    sent_at: str | None = None
+    error: str | None = None
 
 
 app = FastAPI(
@@ -190,6 +199,21 @@ def queue_job(job_type: str, lead_id: int | None, payload: dict[str, Any], send_
     jobs.insert(0, job.model_dump())
     record_activity("job_queued", f"Queued {job_type.replace('_', ' ')}", lead_id=lead_id)
     return job.model_dump()
+
+
+def get_job(job_id: int) -> dict[str, Any] | None:
+    for job in get_runtime_jobs():
+        if job["id"] == job_id:
+            return job
+    return None
+
+
+def update_job(job_id: int, **values: Any) -> dict[str, Any] | None:
+    job = get_job(job_id)
+    if job is None:
+        return None
+    job.update(values)
+    return job
 
 
 def build_fallback_draft(lead: dict[str, Any]) -> dict[str, str]:
@@ -316,6 +340,85 @@ async def send_email_stub(draft_id: int) -> None:
     logger.info("Queued draft %s for delivery", draft_id)
 
 
+def deliver_email(lead: dict[str, Any], draft: dict[str, Any]) -> DeliveryResult:
+    if settings.email_delivery_mode == "smtp":
+        if not settings.smtp_ready:
+            raise RuntimeError("SMTP mode is enabled, but SMTP credentials are incomplete.")
+
+        message = EmailMessage()
+        from_header = settings.smtp_from_email
+        if settings.smtp_from_name:
+            from_header = f"{settings.smtp_from_name} <{settings.smtp_from_email}>"
+
+        message["Subject"] = draft["email_subject"]
+        message["From"] = from_header
+        message["To"] = lead["email"]
+        message.set_content(draft["email_body"])
+
+        with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=20) as smtp:
+            if settings.smtp_use_tls:
+                smtp.starttls()
+            smtp.login(settings.smtp_username, settings.smtp_password)
+            smtp.send_message(message)
+
+        return DeliveryResult(
+            status="sent",
+            provider="smtp",
+            sent_at=datetime.utcnow().isoformat(),
+        )
+
+    logger.info("Dry-run delivery for lead %s <%s>", lead.get("name"), lead.get("email"))
+    return DeliveryResult(
+        status="simulated",
+        provider="dry_run",
+        sent_at=datetime.utcnow().isoformat(),
+    )
+
+
+def process_outbound_job(job_id: int) -> None:
+    job = update_job(job_id, status="sending", started_at=datetime.utcnow().isoformat())
+    if job is None:
+        logger.warning("Job %s disappeared before processing", job_id)
+        return
+
+    draft_id = job["payload"].get("draft_id")
+    draft = get_runtime_drafts().get(draft_id)
+    if draft is None:
+        update_job(job_id, status="failed", error="Draft not found")
+        record_activity("delivery_failed", "Outbound draft was missing before send", lead_id=job.get("lead_id"))
+        return
+
+    lead = get_store().get_lead(draft["lead_id"])
+    if lead is None:
+        update_job(job_id, status="failed", error="Lead not found")
+        record_activity("delivery_failed", "Lead was missing before send", lead_id=draft["lead_id"])
+        return
+
+    try:
+        result = deliver_email(lead, draft)
+        get_store().create_outbound_message(
+            {
+                "lead_id": lead["id"],
+                "channel": "email",
+                "subject": draft["email_subject"],
+                "body": draft["email_body"],
+                "confidence_score": draft["confidence_score"],
+                "approved": True,
+                "sent_at": result.sent_at,
+            }
+        )
+        update_job(job_id, status=result.status, provider=result.provider, sent_at=result.sent_at)
+        record_activity(
+            "delivery_sent" if result.status == "sent" else "delivery_simulated",
+            f"Outbound email {result.status}",
+            lead_id=lead["id"],
+        )
+    except Exception as error:
+        logger.exception("Outbound delivery failed for job %s", job_id)
+        update_job(job_id, status="failed", error=str(error), finished_at=datetime.utcnow().isoformat())
+        record_activity("delivery_failed", str(error), lead_id=lead["id"])
+
+
 @app.get("/health")
 async def health() -> dict[str, Any]:
     store = get_store()
@@ -327,6 +430,8 @@ async def health() -> dict[str, Any]:
         "anthropic_configured": settings.has_anthropic,
         "supabase_configured": settings.has_supabase,
         "auth_enabled": settings.auth_enabled,
+        "email_delivery_mode": settings.email_delivery_mode,
+        "smtp_ready": settings.smtp_ready,
     }
 
 
@@ -428,8 +533,8 @@ async def approve_draft(
 
     if request.approved:
         draft["status"] = "approved"
-        background_tasks.add_task(send_email_stub, draft_id)
         job = queue_job("send_outbound", draft["lead_id"], {"draft_id": draft_id, "channel": draft["channel"]})
+        background_tasks.add_task(process_outbound_job, job["id"])
         get_store().update_lead(draft["lead_id"], {"status": "outreach_sent"})
         record_activity("draft_approved", "Approved outbound draft", lead_id=draft["lead_id"])
         return {"status": "approved", "job": job}
@@ -526,6 +631,11 @@ async def queue_follow_up(request: QueueJobRequest, _: None = Depends(require_op
 @app.get("/jobs")
 async def list_jobs() -> list[dict[str, Any]]:
     return get_runtime_jobs()[:100]
+
+
+@app.get("/messages/outbound")
+async def list_outbound_messages(limit: int = Query(default=50, ge=1, le=200)) -> list[dict[str, Any]]:
+    return get_store().list_outbound_messages(limit=limit)
 
 
 @app.get("/activities")

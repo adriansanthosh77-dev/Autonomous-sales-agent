@@ -61,6 +61,7 @@ logs/
 # Cache
 leads_cache.json
 .cache/
+.codex_deps/
 
 # Output files
 *.csv

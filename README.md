@@ -2,6 +2,129 @@
 
 AI-powered GTM automation foundation for lead sourcing, outreach drafting, reply triage, funnel tracking, and operator review.
 
+## MCP Server Upgrade
+
+This repository now includes a production-style MCP server in `mcp_server/`. MCP, or Model Context Protocol, is the tool layer that lets Claude discover and call business capabilities at runtime. Instead of hardcoding Gmail, WhatsApp, Google Sheets, Ads, Analytics, Contentful, Iterable, and Trigger.dev orchestration into every agent prompt, Claude gets a stable catalog of tools with clear inputs, validation, retry boundaries, dry-run behavior, and provider-specific implementation modules.
+
+The interview positioning is simple:
+
+> I built a multi-agent autonomous sales system and upgraded it into a full MCP server architecture where Claude dynamically accesses CRM, outreach, analytics, growth, lifecycle, and automation systems across the business stack.
+
+### Why MCP Beats Direct API Orchestration
+
+Direct API integrations couple agent prompts to implementation details: OAuth quirks, endpoint payloads, retry rules, rate limits, and provider-specific naming. MCP moves those details into server-side tools. Claude asks for outcomes like `fetch_high_intent_leads`, `send_followup_email`, `get_top_converting_pages`, or `create_iterable_journey`; the MCP server owns validation, auth, logging, retries, provider transport, and safe fallbacks.
+
+That separation makes the system easier to extend. A new lifecycle provider, ads channel, CRM field, or analytics source becomes a new tool module or transport implementation rather than a rewrite of every agent workflow.
+
+### MCP Architecture
+
+```text
+autonomous-sales-system/
+├── mcp_server/
+│   ├── server.py                  # FastMCP entrypoint and tool registration
+│   ├── config.py                  # Environment-driven provider configuration
+│   ├── core/                      # Sales, CRM, Gmail, Sheets, WhatsApp, leads
+│   ├── growth/                    # Ads, GA4, GSC, GTM, Contentful, Iterable
+│   ├── infra/                     # Trigger.dev, webhooks, scheduling, retries
+│   └── utils/                     # Auth, logging, validation, HTTP helpers
+├── agents/                        # Agent policies and orchestration prompts
+├── workflows/                     # Durable workflow and Trigger.dev mappings
+└── tests/test_mcp_server.py        # MCP smoke test
+```
+
+### Available MCP Tool Surface
+
+Core sales and CRM tools:
+
+- `send_followup_email`
+- `search_gmail_replies`
+- `fetch_leads`
+- `fetch_high_intent_leads`
+- `create_or_import_lead`
+- `enrich_lead`
+- `update_google_sheet`
+- `send_whatsapp_message`
+- `update_pipeline_stage`
+- `get_campaign_performance`
+
+Growth, analytics, and lifecycle tools:
+
+- `launch_google_ads_campaign`
+- `get_google_ads_performance`
+- `create_retargeting_campaign`
+- `pull_ga4_conversion_report`
+- `get_top_converting_pages`
+- `get_gsc_keyword_opportunities`
+- `get_seo_opportunities`
+- `validate_gtm_tracking_setup`
+- `analyze_gtm_tracking`
+- `update_contentful_page`
+- `optimize_contentful_landing_page`
+- `create_iterable_email_journey`
+- `create_iterable_journey`
+
+Infrastructure tools:
+
+- `trigger_background_workflow`
+- `trigger_background_sales_workflow`
+- `get_background_job_status`
+- `schedule_workflow`
+- `list_scheduled_workflows`
+- `list_recent_webhook_events`
+
+### How Claude Connects
+
+Run the MCP server locally:
+
+```bash
+python -m mcp_server.server
+```
+
+Then configure Claude Desktop or your Claude MCP client to launch that command from the repository root. The server uses Anthropic's `FastMCP` interface from the Python MCP SDK and registers tools from each module during startup.
+
+Local development defaults to `MCP_DRY_RUN=true`. That means Claude can exercise production-shaped tool calls without sending real emails, launching ads, editing Contentful, or messaging WhatsApp contacts. For production, set `MCP_DRY_RUN=false` and provide the provider credentials listed in `.env.example`.
+
+### Trigger.dev Role
+
+Trigger.dev should own durable background work: lead enrichment, reply triage, multi-step follow-up sequences, lifecycle journey sync, campaign optimization, and periodic analytics jobs. Claude can call `trigger_background_sales_workflow` for long-running work instead of waiting inside a chat turn. The MCP server passes an idempotency key so retries do not accidentally duplicate outreach or campaign actions.
+
+Recommended workflow mapping:
+
+- `lead_enrichment`: enrich, dedupe, score, and route new leads.
+- `follow_up_sequence`: schedule compliant email and WhatsApp steps with suppression rules.
+- `reply_triage`: classify intent, update CRM stage, and trigger next-best action.
+- `growth_optimization`: combine GA4, GSC, GTM, Ads, and Contentful signals.
+- `lifecycle_journey_sync`: create Iterable journeys for nurture and activation.
+
+### GTM Means Two Things
+
+In this repo, GTM can mean:
+
+- Google Tag Manager: the tracking container used for tags, triggers, events, and conversion measurement. MCP tools like `validate_gtm_tracking_setup` and `analyze_gtm_tracking` refer to this meaning.
+- Go-To-Market: the broader sales and growth motion across leads, channels, campaigns, lifecycle, and revenue operations.
+
+The system supports both: Google Tag Manager for measurement integrity, and Go-To-Market automation for revenue execution.
+
+### Production Deployment Strategy
+
+Deploy the existing FastAPI backend and the MCP server as separate processes. Keep the backend responsible for REST endpoints, operator UI support, and CRM persistence. Keep the MCP server responsible for Claude tool access and provider integrations. Run Trigger.dev workers separately for durable jobs.
+
+Production checklist:
+
+- Set `MCP_DRY_RUN=false`.
+- Store secrets in Railway, Render, Fly.io, AWS Secrets Manager, Doppler, or a similar secret manager.
+- Use OAuth/service-account credentials for Google Workspace, GA4, GSC, GTM, and Google Ads.
+- Add provider-specific rate limit handling inside the relevant tool module.
+- Route long-running or retry-sensitive operations through Trigger.dev.
+- Keep webhook endpoints signature-validated with `WEBHOOK_SIGNING_SECRET`.
+- Add structured logs and error reporting around every provider call.
+
+### Extending Tools
+
+Add a new provider capability by creating or editing one module under `mcp_server/core`, `mcp_server/growth`, or `mcp_server/infra`, then registering it in `mcp_server/server.py`. Keep each tool business-oriented. Prefer `create_retargeting_campaign` over `post_to_meta_endpoint`, and prefer `get_seo_opportunities` over `query_search_console_rows`.
+
+The MCP boundary should stay recruiter-grade and production-readable: Claude sees business actions; engineers see isolated provider transports, validation, retries, logging, and dry-run safety.
+
 ## 🎯 What It Does
 
 Autonomous system that handles the entire sales funnel:
@@ -86,6 +209,10 @@ The current frontend now includes an operator console for:
 - generating and approving drafts
 - queuing follow-ups
 - viewing job and activity history
+
+Outbound email delivery now supports two modes:
+- `EMAIL_DELIVERY_MODE=dry_run` for safe local testing
+- `EMAIL_DELIVERY_MODE=smtp` for real sends through an SMTP provider such as Gmail or SendGrid
 
 ---
 

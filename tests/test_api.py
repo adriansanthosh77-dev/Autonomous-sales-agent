@@ -6,6 +6,11 @@ from backend.storage import InMemoryLeadStore
 
 def build_client() -> TestClient:
     app.state.store = InMemoryLeadStore()
+    app.state.jobs = []
+    app.state.activities = []
+    app.state.drafts = {}
+    app.state.job_ids = iter(range(1, 10_000))
+    app.state.draft_ids = iter(range(1, 10_000))
     if hasattr(app.state, "anthropic_client"):
         delattr(app.state, "anthropic_client")
     return TestClient(app)
@@ -77,6 +82,11 @@ def test_approve_draft_creates_job() -> None:
     jobs_response = client.get("/jobs")
     assert jobs_response.status_code == 200
     assert len(jobs_response.json()) == 1
+    assert jobs_response.json()[0]["status"] in {"simulated", "sent"}
+
+    outbound_response = client.get("/messages/outbound")
+    assert outbound_response.status_code == 200
+    assert len(outbound_response.json()) == 1
 
 
 def test_dashboard_summary() -> None:
@@ -85,6 +95,7 @@ def test_dashboard_summary() -> None:
     response = client.get("/dashboard/summary")
     assert response.status_code == 200
     assert response.json()["totals"]["leads"] == 1
+    assert "email_delivery_mode" not in response.json()
 
 
 def test_funnel_metrics() -> None:

@@ -86,6 +86,29 @@ The frontend now ships with an operator console, though the backend is still the
 
 The current UI is an operator console that expects `REACT_APP_API_URL` to point at the FastAPI server.
 
+#### Real Outbound Email
+
+For safe local development, leave:
+
+```bash
+EMAIL_DELIVERY_MODE=dry_run
+```
+
+For real outbound sending, switch to:
+
+```bash
+EMAIL_DELIVERY_MODE=smtp
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USERNAME=your-email@example.com
+SMTP_PASSWORD=your-app-password
+SMTP_FROM_EMAIL=your-email@example.com
+SMTP_FROM_NAME=Autonomous Sales
+SMTP_USE_TLS=true
+```
+
+With Gmail, use an app password rather than your normal account password.
+
 ## Production Deployment
 
 ### Option 1: Railway + Vercel (Easiest)
